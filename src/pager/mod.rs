@@ -7,9 +7,11 @@
 //! - `codec`：分頁編碼/解碼
 //! - `wal`：預寫式日誌（Write-Ahead Logging）
 //! - `page_lock`：頁面級鎖定管理器
+//! - `lsm`：LSM Tree 儲存引擎
 
 pub mod codec;
 pub mod storage;
 pub mod wal;
 pub mod page_lock;
+pub mod lsm;
 

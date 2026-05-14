@@ -14,7 +14,65 @@ import sys
 import json
 import subprocess
 import tempfile
+import threading
 from typing import Optional, List, Any, Union
+from collections import OrderedDict
+
+# ============================================================================
+# Query Cache：查詢計畫快取
+# ============================================================================
+
+class QueryCache:
+    """查詢計畫快取 - 避免重複解析相同 SQL"""
+
+    def __init__(self, max_size: int = 100):
+        self.cache = OrderedDict()
+        self.max_size = max_size
+        self.hits = 0
+        self.misses = 0
+        self._lock = threading.Lock()
+
+    def get(self, sql: str) -> Optional[str]:
+        """取得快取的 SQL（返回正規化後的 SQL）"""
+        with self._lock:
+            normalized = sql.strip().upper()
+            if normalized in self.cache:
+                self.hits += 1
+                # 移到末尾（最近使用）
+                self.cache.move_to_end(normalized)
+                return self.cache[normalized]
+            self.misses += 1
+            return None
+
+    def put(self, sql: str, normalized_sql: str):
+        """放入快取"""
+        with self._lock:
+            normalized = sql.strip().upper()
+            if normalized in self.cache:
+                self.cache.move_to_end(normalized)
+            else:
+                self.cache[normalized] = normalized_sql
+                if len(self.cache) > self.max_size:
+                    self.cache.popitem(last=False)
+
+    def clear(self):
+        """清除快取"""
+        with self._lock:
+            self.cache.clear()
+            self.hits = 0
+            self.misses = 0
+
+    def stats(self) -> dict:
+        """取得統計資訊"""
+        with self._lock:
+            total = self.hits + self.misses
+            hit_rate = self.hits / total if total > 0 else 0
+            return {
+                "hits": self.hits,
+                "misses": self.misses,
+                "hit_rate": f"{hit_rate:.2%}",
+                "size": len(self.cache),
+            }
 
 # ============================================================================
 # 例外類別
@@ -90,9 +148,10 @@ class Connection:
             print(cursor.fetchall())
     """
 
-    def __init__(self, path: Optional[str] = None):
+    def __init__(self, path: Optional[str] = None, enable_cache: bool = True):
         self.path = path
         self._process = None
+        self._cache = QueryCache() if enable_cache else None
         self._start_server()
 
     def _start_server(self):
@@ -201,6 +260,17 @@ class Connection:
             except:
                 self._process.kill()
             self._process = None
+
+    @property
+    def cache(self):
+        """取得查詢快取"""
+        return self._cache
+
+    def cache_stats(self):
+        """取得快取統計"""
+        if self._cache:
+            return self._cache.stats()
+        return {"enabled": False}
 
     def __enter__(self):
         return self

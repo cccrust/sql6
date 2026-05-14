@@ -10,7 +10,11 @@
 #       print(row)
 #   conn.close()
 
-__version__ = "4.0.2"
-__all__ = ["connect", "Connection", "Cursor", "Error"]
+__version__ = "6.4.0"
+__all__ = [
+    "connect", "Connection", "Cursor", "Error",
+    "Sql6Pool", "PoolConfig", "QueryCache",
+]
 
-from .client import connect, Connection, Cursor, Error
+from .client import connect, Connection, Cursor, Error, QueryCache
+from .pool import Sql6Pool, PoolConfig
