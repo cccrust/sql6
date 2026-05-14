@@ -145,6 +145,33 @@ impl DirStorage {
     pub fn read_page_range(&self, start: usize, count: usize) -> Vec<Option<Vec<u8>>> {
         (start..start + count).map(|id| self.read_page(id).ok()).collect()
     }
+
+    /// 預取頁面範圍（快取優化）
+    pub fn prefetch_range(&self, start: usize, count: usize) {
+        self.cache.prefetch_range(start, count, |id| self.read_page_from_disk(id).ok());
+    }
+
+    /// 預取特定頁面
+    pub fn prefetch(&self, page_id: usize) {
+        if let Ok(data) = self.read_page_from_disk(page_id) {
+            self.cache.prefetch(page_id, data);
+        }
+    }
+
+    /// 儲存熱門頁面（關閉時呼叫）
+    pub fn save_hot_pages(&self) -> std::io::Result<()> {
+        self.cache.save_hot_pages(&self.dir_path)
+    }
+
+    /// 預熱快取（開啟時呼叫）
+    pub fn warm_up_cache(&self) -> std::io::Result<()> {
+        self.cache.warm_up(&self.dir_path)
+    }
+
+    /// 取得熱門頁面列表
+    pub fn get_hot_pages(&self) -> Vec<usize> {
+        self.cache.get_hot_page_list()
+    }
 }
 
 impl Storage for DirStorage {

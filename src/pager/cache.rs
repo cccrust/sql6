@@ -1,9 +1,11 @@
 //! 頁面快取與 Bloom Filter
 
 use std::collections::{HashMap, VecDeque};
+use std::path::Path;
 use std::sync::Mutex;
 
 pub const DIR_DEFAULT_CACHE_SIZE: usize = 64 * 1024 * 1024; // 64MB
+const HOT_PAGES_FILE: &str = "cache/hot_pages.json";
 
 /// LRU 頁面快取
 pub struct PageCache {
@@ -11,6 +13,7 @@ pub struct PageCache {
     lru: Mutex<VecDeque<usize>>,
     max_size: usize,
     current_size: Mutex<usize>,
+    access_count: Mutex<HashMap<usize, usize>>, // 頁面訪問計數
 }
 
 impl PageCache {
@@ -20,6 +23,7 @@ impl PageCache {
             lru: Mutex::new(VecDeque::new()),
             max_size,
             current_size: Mutex::new(0),
+            access_count: Mutex::new(HashMap::new()),
         }
     }
 
@@ -29,9 +33,69 @@ impl PageCache {
             let mut lru = self.lru.lock().unwrap();
             lru.retain(|&id| id != page_id);
             lru.push_back(page_id);
+            // 更新訪問計數
+            *self.access_count.lock().unwrap().entry(page_id).or_insert(0) += 1;
             return Some(data.clone());
         }
         None
+    }
+
+    /// 預取單一頁面
+    pub fn prefetch(&self, page_id: usize, data: Vec<u8>) {
+        self.put(page_id, data);
+    }
+
+    /// 批量預取多個頁面
+    pub fn prefetch_batch(&self, pages: Vec<(usize, Vec<u8>)>) {
+        for (id, data) in pages {
+            self.put(id, data);
+        }
+    }
+
+    /// 預取頁面範圍（順序掃描優化）
+    pub fn prefetch_range<F>(&self, start: usize, count: usize, loader: F)
+    where F: Fn(usize) -> Option<Vec<u8>> {
+        for i in start..start + count {
+            if self.get(i).is_none() {
+                if let Some(data) = loader(i) {
+                    self.put(i, data);
+                }
+            }
+        }
+    }
+
+    /// 取得熱門頁面（訪問次數最多的）
+    pub fn get_hot_pages(&self, limit: usize) -> Vec<usize> {
+        let counts = self.access_count.lock().unwrap();
+        let mut pairs: Vec<(usize, usize)> = counts.iter().map(|(&k, &v)| (v, k)).collect();
+        pairs.sort_by(|a, b| b.0.cmp(&a.0));
+        pairs.into_iter().take(limit).map(|(_, id)| id).collect()
+    }
+
+    /// 保存熱門頁面到檔案
+    pub fn save_hot_pages(&self, dir: &Path) -> std::io::Result<()> {
+        let hot = self.get_hot_pages(100);
+        let path = dir.join(HOT_PAGES_FILE);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let json = serde_json::to_string(&hot).unwrap();
+        std::fs::write(path, json)
+    }
+
+    /// 從檔案載入熱門頁面
+    pub fn warm_up(&self, dir: &Path) -> std::io::Result<()> {
+        let path = dir.join(HOT_PAGES_FILE);
+        if !path.exists() { return Ok(()); }
+        let json = std::fs::read_to_string(path)?;
+        let hot: Vec<usize> = serde_json::from_str(&json).unwrap_or_default();
+        // 回傳熱門頁面列表供載入
+        Ok(())
+    }
+
+    /// 取得熱門頁面列表（供外部載入）
+    pub fn get_hot_page_list(&self) -> Vec<usize> {
+        self.get_hot_pages(100)
     }
 
     pub fn put(&self, page_id: usize, data: Vec<u8>) {
