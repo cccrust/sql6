@@ -8,6 +8,8 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
+pub use super::page_lock::{PageLockManager, LockedStorage, LockMode, LockError};
+
 // ── Storage trait ─────────────────────────────────────────────────────────
 
 pub trait Storage: Send + Sync {
@@ -400,6 +402,211 @@ impl Storage for DiskStorage {
     fn set_catalog_root(&mut self, root: usize) {
         self.catalog_root = Some(root);
         let _ = self.write_header();
+    }
+    fn is_wal(&self) -> bool { true }
+}
+
+// ── DirStorage（目錄式多檔案儲存）──────────────────────────────────────────
+
+/// 目錄式儲存：使用單一資料夾多檔案結構
+///
+/// 目錄結構：
+/// ```text
+/// db.sql6/
+///   catalog.meta      # 中繼資料
+///   data/             # 資料頁面
+///     0.page          # 頁面 0
+///     1.page          # 頁面 1
+///   wal/              # WAL 日誌
+///     wal.log
+/// ```
+pub struct DirStorage {
+    dir_path: std::path::PathBuf,
+    data_dir: std::path::PathBuf,
+    wal_dir: std::path::PathBuf,
+    page_count: usize,
+    catalog_root: Option<usize>,
+    wal: Wal,
+    is_new: bool,
+}
+
+impl DirStorage {
+    /// 開啟或建立目錄式儲存
+    pub fn open<P: AsRef<Path>>(path: P) -> std::io::Result<Self> {
+        let dir_path = path.as_ref().to_path_buf();
+        let data_dir = dir_path.join("data");
+        let wal_dir = dir_path.join("wal");
+        
+        // 檢查是否新建立
+        let is_new = !dir_path.exists();
+        
+        // 建立目錄結構
+        std::fs::create_dir_all(&dir_path)?;
+        std::fs::create_dir_all(&data_dir)?;
+        std::fs::create_dir_all(&wal_dir)?;
+        
+        // 讀取或建立 catalog.meta
+        let catalog_path = dir_path.join("catalog.meta");
+        let (page_count, catalog_root) = if catalog_path.exists() {
+            Self::read_catalog(&catalog_path)?
+        } else {
+            (0, None)
+        };
+        
+        // 建立 WAL
+        let wal = Wal::open(&dir_path.with_extension("sql6wal"))?;
+        
+        let mut storage = DirStorage {
+            dir_path,
+            data_dir,
+            wal_dir,
+            page_count,
+            catalog_root,
+            wal,
+            is_new,
+        };
+        
+        if is_new {
+            storage.write_catalog()?;
+        }
+        
+        Ok(storage)
+    }
+
+    /// 讀取 catalog.meta
+    fn read_catalog(path: &Path) -> std::io::Result<(usize, Option<usize>)> {
+        let data = std::fs::read(path)?;
+        if data.len() < 8 {
+            return Ok((0, None));
+        }
+        let page_count = u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
+        let catalog_root = if data.len() >= 8 && data[4] != 0 || data.len() > 8 {
+            let root = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
+            Some(root as usize)
+        } else {
+            None
+        };
+        Ok((page_count, catalog_root))
+    }
+
+    /// 寫入 catalog.meta
+    fn write_catalog(&self) -> std::io::Result<()> {
+        let catalog_path = self.dir_path.join("catalog.meta");
+        let mut data = vec![0u8; 16];
+        // page_count
+        data[0..4].copy_from_slice(&(self.page_count as u32).to_le_bytes());
+        // catalog_root
+        if let Some(root) = self.catalog_root {
+            data[4..8].copy_from_slice(&(root as u32).to_le_bytes());
+        }
+        std::fs::write(catalog_path, &data)
+    }
+
+    /// 取得頁面檔案路徑
+    fn page_path(&self, page_id: usize) -> std::path::PathBuf {
+        self.data_dir.join(format!("{}.page", page_id))
+    }
+
+    /// 讀取頁面
+    fn read_page(&self, page_id: usize) -> std::io::Result<Vec<u8>> {
+        let path = self.page_path(page_id);
+        if path.exists() {
+            std::fs::read(&path)
+        } else {
+            // 嘗試從 WAL 讀取
+            if let Some(data) = self.wal.read_page(page_id as u32) {
+                return Ok(data.to_vec());
+            }
+            Err(std::io::Error::new(std::io::ErrorKind::NotFound, "page not found"))
+        }
+    }
+
+    /// 寫入頁面
+    fn write_page(&mut self, page_id: usize, data: &[u8]) -> std::io::Result<()> {
+        let path = self.page_path(page_id);
+        
+        // 確保頁面不超過目前最大值
+        if page_id >= self.page_count {
+            self.page_count = page_id + 1;
+        }
+        
+        // 寫入 WAL
+        self.wal.write_page(page_id as u32, data.to_vec());
+        
+        // 寫入資料檔（如果是已提交的資料）
+        if !self.wal.in_txn() {
+            std::fs::write(&path, data)?;
+        }
+        
+        Ok(())
+    }
+}
+
+impl Storage for DirStorage {
+    fn read_node(&mut self, page_id: usize) -> Node {
+        // 優先從 WAL 讀取（交易中可能有未提交的修改）
+        if let Some(data) = self.wal.read_page(page_id as u32) {
+            return decode_node(data);
+        }
+        
+        // 從資料檔讀取
+        let data = self.read_page(page_id).expect("page not found");
+        decode_node(&data)
+    }
+
+    fn write_node(&mut self, page_id: usize, node: &Node) {
+        let buf = encode_node(node);
+        
+        // 如果在交易中，先保存原始頁面
+        if self.wal.in_txn() {
+            if let Ok(original) = self.read_page(page_id) {
+                self.wal.save_original(page_id as u32, original);
+            }
+        }
+        
+        // 寫入 WAL
+        self.wal.write_page(page_id as u32, buf);
+    }
+
+    fn alloc_page(&mut self) -> usize {
+        let id = self.page_count;
+        self.page_count += 1;
+        
+        // 寫入空白頁到 WAL
+        let blank = vec![0u8; PAGE_SIZE];
+        self.wal.write_page(id as u32, blank);
+        
+        // 更新 catalog
+        let _ = self.write_catalog();
+        
+        id
+    }
+
+    fn page_count(&self) -> usize { self.page_count }
+
+    fn flush(&mut self) {
+        // Checkpoint: 將 WAL 中的所有頁面寫入資料檔
+        if self.wal.frame_count() > 0 {
+            // 先收集所有要寫入的頁面，避免在 closure 中借用 self
+            let data_dir = self.data_dir.clone();
+            self.wal.checkpoint(|page_id, data| {
+                let path = data_dir.join(format!("{}.page", page_id));
+                std::fs::write(&path, data)
+            }).unwrap();
+        }
+        
+        // 寫入 catalog
+        let _ = self.write_catalog();
+    }
+
+    fn begin_txn(&mut self)    { self.wal.begin(); }
+    fn commit_txn(&mut self)   { self.wal.commit().unwrap(); }
+    fn rollback_txn(&mut self) { self.wal.rollback(); }
+
+    fn catalog_root(&self) -> Option<usize> { self.catalog_root }
+    fn set_catalog_root(&mut self, root: usize) {
+        self.catalog_root = Some(root);
+        let _ = self.write_catalog();
     }
     fn is_wal(&self) -> bool { true }
 }
@@ -807,6 +1014,176 @@ impl Storage for SharedStorage {
 
     fn rollback_txn(&mut self) {
         self.inner.lock().expect("Storage lock poisoned").rollback_txn();
+    }
+}
+
+// ── DirStorage 測試 ─────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod dir_storage_tests {
+    use super::*;
+    use crate::btree::node::{Key, Node, Record};
+    use std::fs;
+    use std::path::Path;
+
+    fn leaf_with(key: i64, val: &str) -> Node {
+        let mut node = Node::new_leaf();
+        node.keys.push(Key::Integer(key));
+        node.records.push(Record {
+            key: Key::Integer(key),
+            value: val.as_bytes().to_vec(),
+        });
+        node
+    }
+
+    fn cleanup_dir(name: &str) {
+        let path = format!("/tmp/sql6_{}", name);
+        let _ = fs::remove_dir_all(&path);
+    }
+
+    #[test]
+    fn dir_storage_create() {
+        cleanup_dir("dir_test");
+        let path = "/tmp/sql6_dir_test";
+        
+        let store = DirStorage::open(path).unwrap();
+        assert_eq!(store.page_count(), 0);
+        
+        cleanup_dir("dir_test");
+    }
+
+    #[test]
+    fn dir_storage_write_read() {
+        cleanup_dir("dir_rw");
+        let path = "/tmp/sql6_dir_rw";
+        
+        // 寫入
+        {
+            let mut store = DirStorage::open(path).unwrap();
+            store.begin_txn();
+            let id = store.alloc_page();
+            store.write_node(id, &leaf_with(99, "world"));
+            store.commit_txn();
+            store.flush();
+        }
+        
+        // 讀取
+        {
+            let mut store = DirStorage::open(path).unwrap();
+            let node = store.read_node(0);
+            assert_eq!(node.keys[0], Key::Integer(99));
+            assert_eq!(node.records[0].value, b"world");
+        }
+        
+        cleanup_dir("dir_rw");
+    }
+
+    #[test]
+    fn dir_storage_rollback() {
+        cleanup_dir("dir_rollback");
+        let path = "/tmp/sql6_dir_rollback";
+        
+        {
+            let mut store = DirStorage::open(path).unwrap();
+            // 先提交
+            store.begin_txn();
+            let id = store.alloc_page();
+            store.write_node(id, &leaf_with(1, "committed"));
+            store.commit_txn();
+            store.flush();
+            
+            // Rollback
+            store.begin_txn();
+            store.write_node(id, &leaf_with(1, "should_be_gone"));
+            store.rollback_txn();
+            
+            // 應該讀到 committed 版本
+            let node = store.read_node(id);
+            assert_eq!(node.records[0].value, b"committed");
+        }
+        
+        cleanup_dir("dir_rollback");
+    }
+
+    #[test]
+    fn dir_storage_catalog() {
+        cleanup_dir("dir_catalog");
+        let path = "/tmp/sql6_dir_catalog";
+        
+        {
+            let mut store = DirStorage::open(path).unwrap();
+            store.set_catalog_root(42);
+            store.flush();
+        }
+        
+        {
+            let store = DirStorage::open(path).unwrap();
+            assert_eq!(store.catalog_root(), Some(42));
+        }
+        
+        cleanup_dir("dir_catalog");
+    }
+}
+
+// ── Page Lock 測試 ─────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod page_lock_tests {
+    use crate::pager::page_lock::*;
+    use crate::pager::storage::{MemoryStorage, Storage};
+    use crate::btree::node::Node;
+    use std::sync::Arc;
+    use std::thread;
+
+    #[test]
+    fn test_shared_lock_concurrent() {
+        let manager = Arc::new(PageLockManager::new());
+        
+        // 多個執行緒可以同時持有共享鎖
+        let m1 = manager.clone();
+        let m2 = manager.clone();
+        
+        let handle1 = thread::spawn(move || {
+            let lock = m1.lock_shared(1).unwrap();
+            thread::sleep(std::time::Duration::from_millis(50));
+            drop(lock);
+        });
+        
+        let handle2 = thread::spawn(move || {
+            let lock = m2.lock_shared(1).unwrap();
+            thread::sleep(std::time::Duration::from_millis(50));
+            drop(lock);
+        });
+        
+        handle1.join().unwrap();
+        handle2.join().unwrap();
+    }
+
+    #[test]
+    fn test_exclusive_blocks_shared() {
+        let manager = PageLockManager::new();
+        
+        // 取得排他鎖
+        let _exclusive = manager.lock_exclusive(1).unwrap();
+        
+        // 共享鎖應該被阻塞
+        let result = manager.try_lock_shared(1);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_locked_storage() {
+        let lock_manager = Arc::new(PageLockManager::new());
+        let mut storage = LockedStorage {
+            inner: MemoryStorage::new(),
+            lock_manager,
+        };
+        
+        // 測試基本操作
+        let id = storage.alloc_page();
+        let node = Node::new_leaf();
+        storage.write_node(id, &node);
+        let _read = storage.read_node(id);
     }
 }
 
