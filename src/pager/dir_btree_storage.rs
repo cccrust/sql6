@@ -3,9 +3,11 @@
 use super::codec::{decode_node, encode_node, PAGE_SIZE};
 use super::wal::Wal;
 use super::cache::{PageCache, BloomFilter, DIR_DEFAULT_CACHE_SIZE};
+use super::page_lock::PageLockManager;
 use super::storage::Storage;
 use crate::btree::node::Node;
 use std::path::Path;
+use std::sync::Arc;
 
 /// 目錄式儲存：使用單一資料夾多檔案結構
 ///
@@ -29,6 +31,7 @@ pub struct DirStorage {
     is_new: bool,
     cache: PageCache,
     bloom: Option<BloomFilter>,
+    lock_manager: Arc<PageLockManager>,
 }
 
 impl DirStorage {
@@ -63,6 +66,7 @@ impl DirStorage {
             is_new,
             cache: PageCache::new(DIR_DEFAULT_CACHE_SIZE),
             bloom: Some(BloomFilter::new(1024 * 1024, 7)),
+            lock_manager: Arc::new(PageLockManager::new()),
         };
         
         if is_new {
@@ -108,18 +112,26 @@ impl DirStorage {
         }
     }
 
-    /// 讀取頁面（含快取）
+    /// 讀取頁面（含快取+鎖）
     fn read_page(&self, page_id: usize) -> std::io::Result<Vec<u8>> {
+        // 先檢查快取（快取本身有執行緒保護）
         if let Some(data) = self.cache.get(page_id) {
             return Ok(data);
         }
+        // 從磁碟讀取（加共享鎖）
+        let _lock = self.lock_manager.lock_shared(page_id)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::WouldBlock, e))?;
         let data = self.read_page_from_disk(page_id)?;
         self.cache.put(page_id, data.clone());
         Ok(data)
     }
 
-    /// 寫入頁面（含快取失效）
+    /// 寫入頁面（含快取失效+鎖）
     fn write_page(&mut self, page_id: usize, data: &[u8]) -> std::io::Result<()> {
+        // 加排他鎖
+        let _lock = self.lock_manager.lock_exclusive(page_id)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::WouldBlock, e))?;
+        
         let path = self.page_path(page_id);
         if page_id >= self.page_count { self.page_count = page_id + 1; }
         self.cache.invalidate(page_id);
