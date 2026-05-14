@@ -75,6 +75,79 @@ class QueryCache:
             }
 
 # ============================================================================
+# Transaction：進階交易控制
+# ============================================================================
+
+class Transaction:
+    """交易控制（含 Savepoint 支援）"""
+
+    def __init__(self, conn: 'Connection'):
+        self.conn = conn
+        self._in_transaction = False
+        self._savepoints: list = []
+        self._committed = False
+
+    def begin(self):
+        """開始交易"""
+        if not self._in_transaction:
+            self.conn.execute("BEGIN")
+            self._in_transaction = True
+            self._committed = False
+
+    def savepoint(self, name: str):
+        """建立儲存點"""
+        if self._in_transaction:
+            self.conn.execute(f"SAVEPOINT {name}")
+            self._savepoints.append(name)
+
+    def rollback_to(self, name: str):
+        """回滾到儲存點"""
+        if self._in_transaction and name in self._savepoints:
+            # 回滾到該儲存點
+            idx = self._savepoints.index(name)
+            # 移除該儲存點之後的所有
+            for sp in reversed(self._savepoints[idx:]):
+                self.conn.execute(f"RELEASE SAVEPOINT {sp}")
+            self._savepoints = self._savepoints[:idx]
+
+    def commit(self):
+        """提交交易"""
+        if self._in_transaction and not self._committed:
+            self.conn.execute("COMMIT")
+            self._in_transaction = False
+            self._committed = True
+
+    def rollback(self):
+        """回滾交易"""
+        if self._in_transaction:
+            self.conn.execute("ROLLBACK")
+            self._in_transaction = False
+            self._savepoints.clear()
+
+    def release_savepoint(self, name: str):
+        """釋放儲存點"""
+        if name in self._savepoints:
+            self.conn.execute(f"RELEASE SAVEPOINT {name}")
+            self._savepoints.remove(name)
+
+    def __enter__(self):
+        self.begin()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_type:
+            self.rollback()
+        else:
+            self.commit()
+
+class IsolationLevel:
+    """隔離層級"""
+    READ_UNCOMMITTED = "READ UNCOMMITTED"
+    READ_COMMITTED = "READ COMMITTED"
+    REPEATABLE_READ = "REPEATABLE READ"
+    SERIALIZABLE = "SERIALIZABLE"
+
+# ============================================================================
 # 例外類別
 # ============================================================================
 

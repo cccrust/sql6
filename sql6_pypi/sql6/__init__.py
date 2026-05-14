@@ -10,13 +10,17 @@
 #       print(row)
 #   conn.close()
 
-__version__ = "6.5.0"
+__version__ = "6.6.0"
 __all__ = [
     "connect", "Connection", "Cursor", "Error",
     "Sql6Pool", "PoolConfig", "QueryCache",
     "Cluster", "NodeInfo", "NodeRole", "ShardManager", "create_cluster",
+    "Transaction", "IsolationLevel",
+    "DatabaseMonitor", "backup", "restore", "verify",
 ]
 
-from .client import connect, Connection, Cursor, Error, QueryCache
+from .client import connect, Connection, Cursor, Error, QueryCache, Transaction, IsolationLevel
 from .pool import Sql6Pool, PoolConfig
 from .cluster import Cluster, NodeInfo, NodeRole, ShardManager, create_cluster
+from .monitor import DatabaseMonitor
+from .backup import BackupManager, backup, restore, verify
