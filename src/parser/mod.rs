@@ -2,7 +2,7 @@
 //!
 //! 使用方式：
 //! ```rust
-//! use sql5::parser::parse;
+//! use sql6::parser::parse;
 //!
 //! let stmts = parse("SELECT * FROM users WHERE id = 1").unwrap();
 //! ```

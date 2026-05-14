@@ -542,7 +542,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "sql5"
+name = "sql6"
 version = "4.0.2"
 dependencies = [
  "futures-util",

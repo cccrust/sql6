@@ -1069,7 +1069,7 @@ impl Executor {
         fs::rename(&temp_path, path)
             .map_err(|e| format!("vacuum rename failed: {}", e))?;
 
-        let _ = fs::remove_file(temp_path.with_extension("sql5wal"));
+        let _ = fs::remove_file(temp_path.with_extension("sql6wal"));
 
         let new_exec = Executor::with_disk(path.as_os_str().to_str().unwrap())
             .map_err(|e| format!("cannot reopen database after vacuum: {}", e))?;

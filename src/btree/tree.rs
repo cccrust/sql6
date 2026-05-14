@@ -405,7 +405,7 @@ mod tests {
     #[test]
     fn test_disk_storage_persist() {
         use crate::pager::storage::DiskStorage;
-        let path = "/tmp/sql5_btree_test.sql5db";
+        let path = "/tmp/sql6_btree_test.sql6db";
         let _ = std::fs::remove_file(path);
         let root_page;
         {

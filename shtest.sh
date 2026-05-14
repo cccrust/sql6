@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# test.sh — sql5 CLI 自動測試
-# 用法：./test.sh [path/to/sql5]
-# 預設找 ./target/debug/sql5
+# test.sh — sql6 CLI 自動測試
+# 用法：./test.sh [path/to/sql6]
+# 預設找 ./target/debug/sql6
 
 set -uo pipefail
 
 # ── 設定 ──────────────────────────────────────────────────────────────────
-BIN="${1:-./target/debug/sql5}"
+BIN="${1:-./target/debug/sql6}"
 PASS=0
 FAIL=0
 SKIP=0
@@ -23,11 +23,10 @@ RESET="\033[0m"
 run_sql() {
     printf '%s\n' "$@" ".quit" \
         | "$BIN" 2>&1 \
-        | sed 's/^sql5> Error:/Error:/' \
-        | grep -v "^sql5 v" \
-        | grep -v "^Type .help" \
+| sed 's/^sql6> Error:/Error:/' \
+        | grep -v "^sql6 v" \
         | grep -v "^$" \
-        | grep -v "^sql5>" \
+        | grep -v "^sql6>" \
         | grep -v "^   \.\.\.>" \
         | grep -v "^Bye" \
         || true
@@ -92,7 +91,7 @@ if [[ ! -x "$BIN" ]]; then
     exit 1
 fi
 
-echo "sql5 CLI Test Suite"
+echo "sql6 CLI Test Suite"
 echo "Binary: $BIN"
 echo "=================================================="
 

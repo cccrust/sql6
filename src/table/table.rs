@@ -2,10 +2,13 @@
 //!
 //! 使用範例：
 //! ```rust
-//! use sql5::table::schema::{Column, DataType, Schema};
-//! use sql5::table::row::{Row, Value};
-//! use sql5::table::table::Table;
-//! use sql5::pager::storage::MemoryStorage;
+//! use sql6::table::schema::{Column, DataType, Schema};
+
+//! use sql6::table::row::{Row, Value};
+
+//! use sql6::table::table::Table;
+
+//! use sql6::pager::storage::MemoryStorage;
 //!
 //! let schema = Schema::new(vec![
 //!     Column::new("id",   DataType::Integer),

@@ -1,5 +1,5 @@
 #!/bin/bash
-# pub.sh — sql5 發布腳本
+# pub.sh — sql6 發布腳本
 #
 # 用法:
 #   ./pub.sh <version> pypi     上傳到 PyPI（會更新版本號）
@@ -52,12 +52,12 @@ function update_version() {
     rm -f Cargo.toml.bak
 
     # Update pyproject.toml
-    sed -i.bak "s/^version = \".*\"/version = \"$NEW_VERSION\"/" sql5_pypi/pyproject.toml
-    rm -f sql5_pypi/pyproject.toml.bak
+    sed -i.bak "s/^version = \".*\"/version = \"$NEW_VERSION\"/" sql6_pypi/pyproject.toml
+    rm -f sql6_pypi/pyproject.toml.bak
 
     # Update __init__.py
-    sed -i.bak "s/__version__ = \".*\"/__version__ = \"$NEW_VERSION\"/" sql5_pypi/sql5/__init__.py
-    rm -f sql5_pypi/sql5/__init__.py.bak
+    sed -i.bak "s/__version__ = \".*\"/__version__ = \"$NEW_VERSION\"/" sql6_pypi/sql6/__init__.py
+    rm -f sql6_pypi/sql6/__init__.py.bak
 
     echo -e "${GREEN}版本已更新${RESET}"
 }
@@ -78,8 +78,8 @@ function do_crates() {
     cargo publish --allow-dirty
 
     echo ""
-    echo -e "${GREEN}完成！已上傳 sql5-$VERSION 到 crates.io${RESET}"
-    echo "安裝: cargo install sql5"
+    echo -e "${GREEN}完成！已上傳 sql6-$VERSION 到 crates.io${RESET}"
+    echo "安裝: cargo install sql6"
 
     cd "$PROJECT_DIR"
 }
@@ -90,13 +90,13 @@ function do_pypi() {
     echo -e "${GREEN}=== 上傳到 PyPI (v$VERSION) ===${RESET}"
     echo ""
 
-    cd "$PROJECT_DIR/sql5_pypi"
+    cd "$PROJECT_DIR/sql6_pypi"
 
     echo "清理舊 build..."
     rm -rf dist build *.egg-info
 
     echo "Build Python package..."
-    cd "$PROJECT_DIR/sql5_pypi"
+    cd "$PROJECT_DIR/sql6_pypi"
     uv pip install build
     uv run python -m build
 
@@ -108,8 +108,8 @@ function do_pypi() {
     fi
 
     echo ""
-    echo -e "${GREEN}完成！已上傳 sql5-$VERSION 到 PyPI${RESET}"
-    echo "安裝: pip install sql5==$VERSION"
+    echo -e "${GREEN}完成！已上傳 sql6-$VERSION 到 PyPI${RESET}"
+    echo "安裝: pip install sql6==$VERSION"
 
     cd "$PROJECT_DIR"
 }
@@ -154,7 +154,7 @@ function do_github() {
 
     # Stage and commit version changes
     echo "提交版本更新..."
-    git add Cargo.toml sql5_pypi/pyproject.toml sql5_pypi/sql5/__init__.py
+    git add Cargo.toml sql6_pypi/pyproject.toml sql6_pypi/sql6/__init__.py
     git commit -m "Bump version to $VERSION"
 
     # Create and push tag
@@ -168,14 +168,14 @@ function do_github() {
     echo -e "${GREEN}完成！已推送到 GitHub${RESET}"
     echo ""
     echo "GitHub Actions 將在約 2-3 分鐘後完成"
-    echo "查看: https://github.com/cccrust/sql5/actions"
+    echo "查看: https://github.com/cccrust/sql6/actions"
     echo ""
     echo "完成後可上傳 PyPI: ./pub.sh $VERSION pypi"
 }
 
 function usage() {
     echo "=============================================="
-    echo "sql5 發布工具"
+    echo "sql6 發布工具"
     echo "=============================================="
     echo ""
     echo "用法:"
@@ -251,7 +251,7 @@ case "$TARGET" in
         do_pypi "$NEW_VERSION"
         echo ""
         echo "Step 4: 提交版本更新..."
-        git add Cargo.toml sql5_pypi/pyproject.toml sql5_pypi/sql5/__init__.py
+git add Cargo.toml sql6_pypi/pyproject.toml sql6_pypi/sql6/__init__.py
         git commit -m "Bump version to $NEW_VERSION"
         echo ""
         echo "Step 5: 推送到 GitHub..."
@@ -261,8 +261,8 @@ case "$TARGET" in
         do_github "$NEW_VERSION"
         echo ""
         echo -e "${GREEN}完成！${RESET}"
-        echo "- crates.io: cargo install sql5"
-        echo "- PyPI: pip install sql5==$NEW_VERSION"
+        echo "- crates.io: cargo install sql6"
+        echo "- PyPI: pip install sql6==$NEW_VERSION"
         echo "- GitHub: CI 正在 build binary，完成後會自動可下載"
         ;;
     *)

@@ -3,10 +3,9 @@
 //! 使用方式：
 //! ```bash
 //! # 啟動伺服器
-//! sql5 --websocket 8080 mydb.db
-//!
-//! # Python 客戶端
-//! from sql5 import connect
+//! sql6 --websocket 8080 mydb.db
+
+//! from sql6 import connect
 //! conn = connect("mydb.db", transport="websocket", port=8080)
 //! cursor = conn.execute("SELECT * FROM users")
 //! ```

@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# testall.sh — Run all sql5 tests
+# testall.sh — Run all sql6 tests
 # 一個指令測試全部
 
 set -uo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
-BINARY="$PROJECT_DIR/target/release/sql5"
+BINARY="$PROJECT_DIR/target/release/sql6"
 
 # 顏色
 RED='\033[0;31m'
@@ -16,7 +16,7 @@ RESET='\033[0m'
 
 echo ""
 echo "=============================================="
-echo -e "${BLUE}sql5 全端測試 ${RESET}(全部測試)"
+echo -e "${BLUE}sql6 全端測試 ${RESET}(全部測試)"
 echo "=============================================="
 echo ""
 
@@ -77,8 +77,8 @@ echo ""
 # ============================================
 echo -e "${BLUE}[4/5] Running Python pytest tests...${RESET}"
 echo ""
-export SQL5_BINARY="$BINARY"
-cd "$PROJECT_DIR/sql5_pypi"
+export SQL6_BINARY="$BINARY"
+cd "$PROJECT_DIR/sql6_pypi"
 export PYTHONPATH="${PWD}:${PYTHONPATH:-}"
 uv run pytest tests/ -v 2>&1 | tail -30
 PYTEST_STATUS=$?
@@ -91,13 +91,13 @@ fi
 echo ""
 
 # ============================================
-# 5. Python client integration test (sql5test.py)
+# 5. Python client integration test (sql6test.py)
 # ============================================
 echo -e "${BLUE}[5/6] Running Python client test...${RESET}"
 echo ""
-cd "$PROJECT_DIR/sql5_pypi/examples"
+cd "$PROJECT_DIR/sql6_pypi/examples"
 rm -f mydb.db
-uv run python sql5test.py 2>&1
+uv run python sql6test.py 2>&1
 PYCLIENT_STATUS=$?
 echo ""
 if [[ $PYCLIENT_STATUS -eq 0 ]]; then
@@ -113,9 +113,9 @@ echo ""
 # ============================================
 echo -e "${BLUE}[6/6] Running WebSocket test...${RESET}"
 echo ""
-cd "$PROJECT_DIR/sql5_pypi/examples"
+cd "$PROJECT_DIR/sql6_pypi/examples"
 rm -f ws_test.db ws_test.db-wal ws_test.db-shm 2>/dev/null
-export SQL5_BINARY="$BINARY"
+export SQL6_BINARY="$BINARY"
 uv run python websocket_test.py 2>&1
 WEBSOCKET_STATUS=$?
 echo ""

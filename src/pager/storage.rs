@@ -301,7 +301,7 @@ impl DiskStorage {
 
         if &hdr[0..8] != MAGIC {
             return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData, "invalid sql5db magic"));
+                std::io::ErrorKind::InvalidData, "invalid sql6db magic"));
         }
         self.page_count = u32::from_le_bytes(hdr[12..16].try_into().unwrap()) as usize;
         let cat_root = u32::from_le_bytes(hdr[16..20].try_into().unwrap()) as usize;
@@ -422,8 +422,8 @@ mod tests {
     }
 
     fn cleanup(name: &str) {
-        let _ = std::fs::remove_file(format!("/tmp/sql5_{}.db", name));
-        let _ = std::fs::remove_file(format!("/tmp/sql5_{}.sql5wal", name));
+        let _ = std::fs::remove_file(format!("/tmp/sql6_{}.db", name));
+        let _ = std::fs::remove_file(format!("/tmp/sql6_{}.sql6wal", name));
     }
 
     #[test]
@@ -440,9 +440,9 @@ mod tests {
     #[test]
     fn disk_write_and_read() {
         cleanup("disk_rw");
-        let _ = std::fs::remove_file("/tmp/sql5_disk_rw.db");
+        let _ = std::fs::remove_file("/tmp/sql6_disk_rw.db");
         {
-            let mut store = DiskStorage::open("/tmp/sql5_disk_rw.db").unwrap();
+            let mut store = DiskStorage::open("/tmp/sql6_disk_rw.db").unwrap();
             store.begin_txn();
             let id = store.alloc_page();
             store.write_node(id, &leaf_with(99, "world"));
@@ -450,7 +450,7 @@ mod tests {
             store.flush();
         }
         {
-            let mut store = DiskStorage::open("/tmp/sql5_disk_rw.db").unwrap();
+            let mut store = DiskStorage::open("/tmp/sql6_disk_rw.db").unwrap();
             let node = store.read_node(0);
             assert_eq!(node.keys[0], Key::Integer(99));
             assert_eq!(node.records[0].value, b"world");
@@ -462,7 +462,7 @@ mod tests {
     fn disk_rollback() {
         cleanup("rollback");
         {
-            let mut store = DiskStorage::open("/tmp/sql5_rollback.db").unwrap();
+            let mut store = DiskStorage::open("/tmp/sql6_rollback.db").unwrap();
             // 先提交一筆
             store.begin_txn();
             let id = store.alloc_page();
@@ -485,7 +485,7 @@ mod tests {
     #[test]
     fn disk_wal_write_through() {
         cleanup("wal_write");
-        let mut store = DiskStorage::open("/tmp/sql5_wal_write.db").unwrap();
+        let mut store = DiskStorage::open("/tmp/sql6_wal_write.db").unwrap();
         store.begin_txn();
         let id = store.alloc_page();
         store.write_node(id, &leaf_with(100, "wal_test"));
@@ -501,7 +501,7 @@ mod tests {
     #[test]
     fn disk_multiple_transactions() {
         cleanup("multi_txn");
-        let mut store = DiskStorage::open("/tmp/sql5_multi_txn.db").unwrap();
+        let mut store = DiskStorage::open("/tmp/sql6_multi_txn.db").unwrap();
         // 第一次交易
         store.begin_txn();
         let id1 = store.alloc_page();
@@ -523,7 +523,7 @@ mod tests {
     #[test]
     fn disk_auto_commit_wal() {
         cleanup("auto_commit");
-        let mut store = DiskStorage::open("/tmp/sql5_auto_commit.db").unwrap();
+        let mut store = DiskStorage::open("/tmp/sql6_auto_commit.db").unwrap();
         // 直接寫入（auto-commit）
         let id = store.alloc_page();
         store.write_node(id, &leaf_with(5, "auto"));
@@ -536,7 +536,7 @@ mod tests {
     #[test]
     fn disk_is_wal_returns_true() {
         cleanup("iswal");
-        let store = DiskStorage::open("/tmp/sql5_iswal.db").unwrap();
+        let store = DiskStorage::open("/tmp/sql6_iswal.db").unwrap();
         assert!(store.is_wal());
         cleanup("iswal");
     }
@@ -545,7 +545,7 @@ mod tests {
     fn disk_reopen_preserves_data() {
         cleanup("reopen");
         {
-            let mut store = DiskStorage::open("/tmp/sql5_reopen.db").unwrap();
+            let mut store = DiskStorage::open("/tmp/sql6_reopen.db").unwrap();
             store.begin_txn();
             let id = store.alloc_page();
             store.write_node(id, &leaf_with(123, "reopen_test"));
@@ -553,7 +553,7 @@ mod tests {
             store.flush();
         }
         {
-            let mut store = DiskStorage::open("/tmp/sql5_reopen.db").unwrap();
+            let mut store = DiskStorage::open("/tmp/sql6_reopen.db").unwrap();
             let node = store.read_node(0);
             assert_eq!(node.keys[0], Key::Integer(123));
             assert_eq!(node.records[0].value, b"reopen_test");
@@ -566,7 +566,7 @@ mod tests {
         cleanup("crash");
         // 模擬：commit 後，程式「崩潰」（不 checkpoint）
         {
-            let mut store = DiskStorage::open("/tmp/sql5_crash.db").unwrap();
+            let mut store = DiskStorage::open("/tmp/sql6_crash.db").unwrap();
             store.begin_txn();
             let id = store.alloc_page();
             store.write_node(id, &leaf_with(777, "survived"));
@@ -575,7 +575,7 @@ mod tests {
         }
         // 重開：WAL replay 應該恢復 page 0
         {
-            let mut store = DiskStorage::open("/tmp/sql5_crash.db").unwrap();
+            let mut store = DiskStorage::open("/tmp/sql6_crash.db").unwrap();
             let node = store.read_node(0);
             assert_eq!(node.keys[0], Key::Integer(777));
             assert_eq!(node.records[0].value, b"survived");
@@ -587,11 +587,11 @@ mod tests {
     fn catalog_root_persists() {
         cleanup("catroot");
         {
-            let mut store = DiskStorage::open("/tmp/sql5_catroot.db").unwrap();
+            let mut store = DiskStorage::open("/tmp/sql6_catroot.db").unwrap();
             store.set_catalog_root(42);
         }
         {
-            let store = DiskStorage::open("/tmp/sql5_catroot.db").unwrap();
+            let store = DiskStorage::open("/tmp/sql6_catroot.db").unwrap();
             assert_eq!(store.catalog_root, Some(42));
         }
         cleanup("catroot");

@@ -5,7 +5,7 @@
 //! # 使用範例
 //!
 //! ```rust
-//! use sql5::fts::fts_table::FtsTable;
+//! use sql6::fts::fts_table::FtsTable;
 //!
 //! let mut table = FtsTable::new("articles", vec!["title".into(), "body".into()]);
 //! table.insert(vec!["Rust Programming".into(), "Fast and safe systems language".into()]);

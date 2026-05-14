@@ -7,9 +7,11 @@
 //!
 //! 使用範例：
 //! ```rust
-//! use sql5::catalog::Catalog;
-//! use sql5::table::schema::{Column, DataType, Schema};
-//! use sql5::pager::MemoryStorage;
+//! use sql6::catalog::Catalog;
+
+//! use sql6::table::schema::{Column, DataType, Schema};
+
+//! use sql6::pager::MemoryStorage;
 //!
 //! let mut catalog = Catalog::new(MemoryStorage::new());
 //! let schema = Schema::new(vec![
@@ -526,7 +528,7 @@ mod tests {
 
     #[test]
     fn disk_catalog_persist() {
-        let path = "/tmp/sql5_catalog_test.sql5db";
+        let path = "/tmp/sql6_catalog_test.sql6db";
         let _ = std::fs::remove_file(path);
 
         let root_page;

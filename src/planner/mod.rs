@@ -2,7 +2,7 @@
 //!
 //! 使用方式：
 //! ```rust
-//! use sql5::planner::executor::Executor;
+//! use sql6::planner::executor::Executor;
 //!
 //! let mut db = Executor::new();
 //! // db 直接接受 SQL 字串（透過 parser + planner）

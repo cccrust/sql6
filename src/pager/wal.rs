@@ -136,7 +136,7 @@ impl Wal {
     /// 開啟或建立 WAL 檔案，並 replay 已提交的 frame
     pub fn open<P: AsRef<Path>>(db_path: P) -> std::io::Result<Self> {
         let db_path = db_path.as_ref();
-        let wal_path = db_path.with_extension("sql5wal");
+        let wal_path = db_path.with_extension("sql6wal");
 
         let wal_exists = wal_path.exists();
         let wal_file = OpenOptions::new()
@@ -363,12 +363,12 @@ mod tests {
     use super::*;
 
     fn tmp_path(name: &str) -> PathBuf {
-        PathBuf::from(format!("/tmp/sql5_wal_{}.db", name))
+        PathBuf::from(format!("/tmp/sql6_wal_{}.db", name))
     }
 
     fn cleanup(name: &str) {
         let _ = std::fs::remove_file(tmp_path(name));
-        let _ = std::fs::remove_file(tmp_path(name).with_extension("sql5wal"));
+        let _ = std::fs::remove_file(tmp_path(name).with_extension("sql6wal"));
     }
 
     #[test]
@@ -478,7 +478,7 @@ mod tests {
         }
         // 損壞 WAL 中的 checksum
         {
-            let wal_path = tmp_path("corrupt").with_extension("sql5wal");
+            let wal_path = tmp_path("corrupt").with_extension("sql6wal");
             let mut f = OpenOptions::new().write(true).open(&wal_path).unwrap();
             // 第一個 frame 從 offset 32 開始，checksum 在 frame[12..16]
             f.seek(SeekFrom::Start((WAL_HEADER_SIZE + 12) as u64)).unwrap();

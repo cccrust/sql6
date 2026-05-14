@@ -39,7 +39,7 @@ impl Repl {
             executor:   Executor::new(),
             fts_tables: HashMap::new(),
             vec_tables: HashMap::new(),
-            prompt:     "sql5> ",
+            prompt:     "sql6> ",
             history:    Vec::new(),
             db_path:    None,
             trace:      false,
@@ -54,7 +54,7 @@ impl Repl {
             executor,
             fts_tables: HashMap::new(),
             vec_tables: HashMap::new(),
-            prompt:     "sql5> ",
+            prompt:     "sql6> ",
             history:    Vec::new(),
             db_path:    Some(path_str),
             trace:      false,
@@ -721,7 +721,7 @@ impl Repl {
     // ── Banner & Help ────────────────────────────────────────────────────
 
     fn print_banner(&self) {
-        println!("sql5 v0.1.0 — SQLite-compatible database with FTS");
+        println!("sql6 v6.0.0 — SQLite-compatible database with FTS and vector similarity");
         println!("Type .help for help, .quit to exit");
         println!();
     }
