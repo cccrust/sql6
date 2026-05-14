@@ -1,6 +1,6 @@
 [package]
 name = "sql6"
-version = "6.8.0"
+version = "6.9.5"
 edition = "2024"
 description = "SQLite compatible database with CJK FTS5 full-text search and vector similarity"
 license = "MIT"
