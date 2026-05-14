@@ -10,7 +10,7 @@
 #       print(row)
 #   conn.close()
 
-__version__ = "6.7.0"
+__version__ = "6.8.0"
 __all__ = [
     "connect", "Connection", "Cursor", "Error",
     "Sql6Pool", "PoolConfig", "QueryCache",
@@ -20,6 +20,8 @@ __all__ = [
     "RBAC", "User", "Role", "PermissionType",
     "Encryption", "AuditLogger",
     "create_rbac", "create_encryption", "create_audit_logger",
+    "MaterializedView", "MaterializedViewManager", "BatchOperation", "QueryHint",
+    "create_materialized_view", "create_batch", "execute_with_hints",
 ]
 
 from .client import connect, Connection, Cursor, Error, QueryCache, Transaction, IsolationLevel
@@ -29,3 +31,7 @@ from .monitor import DatabaseMonitor
 from .backup import BackupManager, backup, restore, verify
 from .security import RBAC, User, Role, PermissionType, Encryption, AuditLogger
 from .security import create_rbac, create_encryption, create_audit_logger
+from .advanced import (
+    MaterializedView, MaterializedViewManager, BatchOperation, QueryHint, AdvancedWindowFunctions,
+    create_materialized_view, create_batch, execute_with_hints
+)

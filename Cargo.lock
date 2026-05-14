@@ -543,7 +543,7 @@ dependencies = [
 
 [[package]]
 name = "sql6"
-version = "4.0.2"
+version = "6.8.0"
 dependencies = [
  "futures-util",
  "hex",
