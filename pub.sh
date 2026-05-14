@@ -95,16 +95,15 @@ function do_pypi() {
     echo "清理舊 build..."
     rm -rf dist build *.egg-info
 
-    echo "Build Python package..."
-    cd "$PROJECT_DIR/sql6_pypi"
-    uv pip install build
-    uv run python -m build
+    echo "使用 uv 建立 Python 環境..."
+    uv sync --frozen
+    uv run --with build python -m build
 
     echo "上傳到 PyPI..."
     if [[ -n "${PYPI_TOKEN:-}" ]]; then
-        twine upload dist/* --user __token__ --password "$PYPI_TOKEN"
+        uv run twine upload dist/* --user __token__ --password "$PYPI_TOKEN"
     else
-        twine upload dist/*
+        uv run twine upload dist/*
     fi
 
     echo ""
