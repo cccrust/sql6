@@ -6,8 +6,89 @@ use super::cache::{PageCache, BloomFilter, DIR_DEFAULT_CACHE_SIZE};
 use super::page_lock::PageLockManager;
 use super::storage::Storage;
 use crate::btree::node::Node;
+use rayon::prelude::*;
+use std::collections::HashMap;
+use std::fs::File;
+use std::io::{Read, Write};
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
+use std::time::{Duration, Instant};
+
+const FD_POOL_MAX_SIZE: usize = 256;
+
+struct FdEntry {
+    file: File,
+    last_access: Instant,
+}
+
+pub struct FileHandleCache {
+    data_dir: std::path::PathBuf,
+    handles: RwLock<HashMap<usize, FdEntry>>,
+    max_size: usize,
+}
+
+impl FileHandleCache {
+    fn new(data_dir: std::path::PathBuf) -> Self {
+        Self {
+            data_dir,
+            handles: RwLock::new(HashMap::new()),
+            max_size: FD_POOL_MAX_SIZE,
+        }
+    }
+
+    fn get_file(&self, page_id: usize) -> std::io::Result<std::fs::File> {
+        let path = self.data_dir.join(format!("{}.page", page_id));
+        let now = Instant::now();
+
+        if let Ok(handles) = self.handles.read() {
+            if let Some(entry) = handles.get(&page_id) {
+                let file = entry.file.try_clone()?;
+                drop(handles);
+                if let Ok(mut handles) = self.handles.write() {
+                    if let Some(entry) = handles.get_mut(&page_id) {
+                        entry.last_access = now;
+                    }
+                }
+                return Ok(file);
+            }
+        }
+
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(&path)?;
+
+        let mut handles = self.handles.write().map_err(|_| std::io::Error::new(std::io::ErrorKind::WouldBlock, "lock poisoned"))?;
+        if handles.len() >= self.max_size {
+            if let Some((oldest_id, _)) = handles
+                .iter()
+                .min_by_key(|(_, entry)| entry.last_access)
+                .map(|(id, entry)| (*id, entry.last_access))
+            {
+                handles.remove(&oldest_id);
+            }
+        }
+        handles.insert(page_id, FdEntry { file: file.try_clone()?, last_access: now });
+        Ok(file)
+    }
+
+    fn invalidate(&self, page_id: usize) {
+        if let Ok(mut handles) = self.handles.write() {
+            handles.remove(&page_id);
+        }
+    }
+
+    fn clear(&self) {
+        if let Ok(mut handles) = self.handles.write() {
+            handles.clear();
+        }
+    }
+
+    fn stats(&self) -> usize {
+        self.handles.read().map(|h| h.len()).unwrap_or(0)
+    }
+}
 
 /// 目錄式儲存：使用單一資料夾多檔案結構
 ///
@@ -32,6 +113,7 @@ pub struct DirStorage {
     cache: PageCache,
     bloom: Option<BloomFilter>,
     lock_manager: Arc<PageLockManager>,
+    fd_pool: FileHandleCache,
 }
 
 impl DirStorage {
@@ -58,7 +140,7 @@ impl DirStorage {
         
         let mut storage = DirStorage {
             dir_path,
-            data_dir,
+            data_dir: data_dir.clone(),
             wal_dir,
             page_count,
             catalog_root,
@@ -67,6 +149,7 @@ impl DirStorage {
             cache: PageCache::new(DIR_DEFAULT_CACHE_SIZE),
             bloom: Some(BloomFilter::new(1024 * 1024, 7)),
             lock_manager: Arc::new(PageLockManager::new()),
+            fd_pool: FileHandleCache::new(data_dir),
         };
         
         if is_new {
@@ -104,7 +187,10 @@ impl DirStorage {
     fn read_page_from_disk(&self, page_id: usize) -> std::io::Result<Vec<u8>> {
         let path = self.page_path(page_id);
         if path.exists() {
-            std::fs::read(&path)
+            let mut file = self.fd_pool.get_file(page_id)?;
+            let mut data = Vec::new();
+            file.read_to_end(&mut data)?;
+            Ok(data)
         } else if let Some(data) = self.wal.read_page(page_id as u32) {
             Ok(data.to_vec())
         } else {
@@ -128,13 +214,13 @@ impl DirStorage {
 
     /// 寫入頁面（含快取失效+鎖）
     fn write_page(&mut self, page_id: usize, data: &[u8]) -> std::io::Result<()> {
-        // 加排他鎖
         let _lock = self.lock_manager.lock_exclusive(page_id)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::WouldBlock, e))?;
         
         let path = self.page_path(page_id);
         if page_id >= self.page_count { self.page_count = page_id + 1; }
         self.cache.invalidate(page_id);
+        self.fd_pool.invalidate(page_id);
         self.wal.write_page(page_id as u32, data.to_vec());
         if !self.wal.in_txn() {
             std::fs::write(&path, data)?;
@@ -144,18 +230,19 @@ impl DirStorage {
     }
 
     pub fn cache_stats(&self) -> (usize, usize, usize) { self.cache.stats() }
-    pub fn clear_cache(&self) { self.cache.clear(); }
+    pub fn fd_pool_stats(&self) -> usize { self.fd_pool.stats() }
+    pub fn clear_cache(&self) { self.cache.clear(); self.fd_pool.clear(); }
     pub fn bloom_insert(&mut self, key: &[u8]) { if let Some(ref mut b) = self.bloom { b.insert(key); } }
     pub fn bloom_might_contain(&self, key: &[u8]) -> bool { self.bloom.as_ref().map(|b| b.might_contain(key)).unwrap_or(true) }
 
-    /// 批量讀取多個頁面（串列，適合小量）
+    /// 批量讀取多個頁面（平行）
     pub fn read_pages(&self, page_ids: &[usize]) -> Vec<Option<Vec<u8>>> {
-        page_ids.iter().map(|&id| self.read_page(id).ok()).collect()
+        page_ids.par_iter().map(|&id| self.read_page(id).ok()).collect()
     }
 
-    /// 讀取頁面範圍（優化全表掃描）
+    /// 讀取頁面範圍（優化全表掃描，平行）
     pub fn read_page_range(&self, start: usize, count: usize) -> Vec<Option<Vec<u8>>> {
-        (start..start + count).map(|id| self.read_page(id).ok()).collect()
+        (start..start + count).into_par_iter().map(|id| self.read_page(id).ok()).collect()
     }
 
     /// 預取頁面範圍（快取優化）

@@ -1555,7 +1555,7 @@ wheels = [
 
 [[package]]
 name = "sql6"
-version = "6.9.5"
+version = "6.14.0"
 source = { editable = "." }
 dependencies = [
     { name = "websocket-client", version = "1.8.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9'" },
