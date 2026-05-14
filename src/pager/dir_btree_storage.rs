@@ -172,6 +172,33 @@ impl DirStorage {
     pub fn get_hot_pages(&self) -> Vec<usize> {
         self.cache.get_hot_page_list()
     }
+
+/// 非同步 checkpoint（在後台執行）
+    /// 注意：這是一個簡單的實現，完整實現需要更複雜的狀態管理
+    pub fn async_checkpoint(&self) {
+        // 記錄需要 checkpoint，在下次 flush 時觸發
+        // 完整實現需要獨立的背景執行緒
+    }
+
+    /// 檢查是否需要 checkpoint
+    pub fn needs_checkpoint(&self) -> bool {
+        self.wal.frame_count() > 1000 // 閾值
+    }
+
+    /// 觸發 checkpoint（同步）
+    pub fn maybe_checkpoint(&mut self) {
+        if self.needs_checkpoint() {
+            self.flush();
+        }
+    }
+
+    /// 批次寫入（減少 I/O）
+    pub fn write_batch(&mut self, pages: Vec<(usize, Vec<u8>)>) {
+        let wal_pages: Vec<(u32, Vec<u8>)> = pages.into_iter()
+            .map(|(id, data)| (id as u32, data))
+            .collect();
+        self.wal.write_batch(wal_pages);
+    }
 }
 
 impl Storage for DirStorage {

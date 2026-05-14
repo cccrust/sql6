@@ -258,6 +258,31 @@ impl Wal {
         }
     }
 
+    /// 批次寫入多頁面（減少 I/O 呼叫）
+    pub fn write_batch(&mut self, pages: Vec<(u32, Vec<u8>)>) {
+        if self.in_txn {
+            // 在交易中，批量寫入 dirty
+            for (page_id, data) in pages {
+                self.dirty.insert(page_id, data);
+            }
+        } else {
+            // auto-commit 模式
+            let txn_id = self.next_txn_id;
+            self.next_txn_id += 1;
+            for (page_id, data) in pages {
+                self.committed.insert(page_id, data.clone());
+                if let Err(e) = self.write_frame(page_id, FRAME_TYPE_DATA, txn_id, &data) {
+                    eprintln!("WAL batch write error: {}", e);
+                }
+            }
+            // 寫入 commit frame
+            let commit_data = vec![0u8; PAGE_SIZE];
+            if let Err(e) = self.write_frame(u32::MAX, FRAME_TYPE_COMMIT, txn_id, &commit_data) {
+                eprintln!("WAL batch commit error: {}", e);
+            }
+        }
+    }
+
     /// 讀取一頁：優先從 dirty → committed WAL 快取
     pub fn read_page(&self, page_id: u32) -> Option<&[u8]> {
         self.dirty.get(&page_id)
