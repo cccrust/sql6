@@ -37,5 +37,6 @@ export PYTHONPATH="${PYTHON_DIR}:${PYTHONPATH:-}"
 
 # Run pytest integration tests
 cd "$PYTHON_DIR"
+unset VIRTUAL_ENV
 uv run pytest tests/test_sql6.py -v
 exit $?

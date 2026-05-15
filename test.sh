@@ -80,6 +80,7 @@ echo ""
 export SQL6_BINARY="$BINARY"
 cd "$PROJECT_DIR/sql6_pypi"
 export PYTHONPATH="${PWD}:${PYTHONPATH:-}"
+unset VIRTUAL_ENV
 uv run pytest tests/ -v 2>&1 | tail -30
 PYTEST_STATUS=$?
 echo ""
@@ -97,6 +98,7 @@ echo -e "${BLUE}[5/6] Running Python client test...${RESET}"
 echo ""
 cd "$PROJECT_DIR/sql6_pypi/examples"
 rm -f mydb.db
+unset VIRTUAL_ENV
 uv run python sql6test.py 2>&1
 PYCLIENT_STATUS=$?
 echo ""
@@ -116,6 +118,7 @@ echo ""
 cd "$PROJECT_DIR/sql6_pypi/examples"
 rm -f ws_test.db ws_test.db-wal ws_test.db-shm 2>/dev/null
 export SQL6_BINARY="$BINARY"
+unset VIRTUAL_ENV
 uv run python websocket_test.py 2>&1
 WEBSOCKET_STATUS=$?
 echo ""

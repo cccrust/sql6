@@ -1,4 +1,5 @@
 //! 目錄式儲存（多檔 BTree）
+#![allow(dead_code, unused)]
 
 use super::codec::{decode_node, encode_node, PAGE_SIZE};
 use super::wal::Wal;
@@ -11,10 +12,14 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::Path;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, Mutex};
 use std::time::{Duration, Instant};
 
 const FD_POOL_MAX_SIZE: usize = 256;
+const NODE_CACHE_MAX_SIZE: usize = 1024;
+const DEFAULT_STRIPE_COUNT: usize = 64;
+const WRITE_COALESCE_WINDOW_MS: u64 = 5;
+const WRITE_COALESCE_THRESHOLD: usize = 100;
 
 struct FdEntry {
     file: File,
@@ -90,6 +95,163 @@ impl FileHandleCache {
     }
 }
 
+struct NodeCacheEntry {
+    node: Node,
+    last_access: Instant,
+}
+
+pub struct NodeCache {
+    nodes: RwLock<HashMap<usize, NodeCacheEntry>>,
+    max_size: usize,
+}
+
+impl NodeCache {
+    fn new(max_size: usize) -> Self {
+        Self {
+            nodes: RwLock::new(HashMap::new()),
+            max_size,
+        }
+    }
+
+    fn get(&self, page_id: usize) -> Option<Node> {
+        let now = Instant::now();
+        let mut result = None;
+        if let Ok(mut nodes) = self.nodes.write() {
+            if let Some(entry) = nodes.get_mut(&page_id) {
+                entry.last_access = now;
+                result = Some(entry.node.clone());
+            }
+        }
+        result
+    }
+
+    fn put(&self, page_id: usize, node: Node) {
+        if let Ok(mut nodes) = self.nodes.write() {
+            if nodes.len() >= self.max_size {
+                if let Some((oldest_id, _)) = nodes
+                    .iter()
+                    .min_by_key(|(_, entry)| entry.last_access)
+                    .map(|(id, entry)| (*id, entry.last_access))
+                {
+                    nodes.remove(&oldest_id);
+                }
+            }
+            nodes.insert(page_id, NodeCacheEntry { node, last_access: Instant::now() });
+        }
+    }
+
+    fn invalidate(&self, page_id: usize) {
+        if let Ok(mut nodes) = self.nodes.write() {
+            nodes.remove(&page_id);
+        }
+    }
+
+    fn clear(&self) {
+        if let Ok(mut nodes) = self.nodes.write() {
+            nodes.clear();
+        }
+    }
+
+    fn stats(&self) -> usize {
+        self.nodes.read().map(|n| n.len()).unwrap_or(0)
+    }
+}
+
+pub struct StripeLockManager {
+    stripes: Vec<RwLock<()>>,
+    num_stripes: usize,
+}
+
+impl StripeLockManager {
+    fn new(num_stripes: usize) -> Self {
+        let stripes = (0..num_stripes).map(|_| RwLock::new(())).collect();
+        Self { stripes, num_stripes }
+    }
+
+    fn stripe(&self, page_id: usize) -> usize {
+        page_id % self.num_stripes
+    }
+
+    fn lock_shared(&self, page_id: usize) -> std::sync::RwLockReadGuard<'_, ()> {
+        let idx = self.stripe(page_id);
+        self.stripes[idx].read().unwrap()
+    }
+
+    fn lock_exclusive(&self, page_id: usize) -> std::sync::RwLockWriteGuard<'_, ()> {
+        let idx = self.stripe(page_id);
+        self.stripes[idx].write().unwrap()
+    }
+
+    fn stats(&self) -> (usize, usize) {
+        (self.num_stripes, self.stripes.iter().filter(|s| s.read().is_ok()).count())
+    }
+}
+
+struct WriteEntry {
+    data: Vec<u8>,
+    timestamp: Instant,
+}
+
+pub struct WriteCoalescer {
+    pending: Mutex<HashMap<usize, WriteEntry>>,
+    window_ms: u64,
+    threshold: usize,
+    last_flush: Mutex<Instant>,
+}
+
+impl WriteCoalescer {
+    fn new(window_ms: u64, threshold: usize) -> Self {
+        Self {
+            pending: Mutex::new(HashMap::new()),
+            window_ms,
+            threshold,
+            last_flush: Mutex::new(Instant::now()),
+        }
+    }
+
+    fn add(&self, page_id: usize, data: Vec<u8>) -> bool {
+        let now = Instant::now();
+        let should_trigger = {
+            let mut pending = self.pending.lock().unwrap();
+            pending.insert(page_id, WriteEntry { data, timestamp: now });
+            let last = *self.last_flush.lock().unwrap();
+            pending.len() >= self.threshold || now.duration_since(last).as_millis() >= self.window_ms as u128
+        };
+        should_trigger
+    }
+
+    fn should_flush(&self) -> bool {
+        let now = Instant::now();
+        let should = {
+            let pending = self.pending.lock().unwrap();
+            let last = *self.last_flush.lock().unwrap();
+            pending.is_empty() || now.duration_since(last).as_millis() >= self.window_ms as u128
+        };
+        should
+    }
+
+    fn drain(&mut self) -> Vec<(usize, Vec<u8>)> {
+        let entries = {
+            let mut pending = self.pending.lock().unwrap();
+            *self.last_flush.lock().unwrap() = Instant::now();
+            pending.drain()
+                .map(|(id, entry)| (id, entry.data))
+                .collect()
+        };
+        entries
+    }
+
+    fn pending_count(&self) -> usize {
+        self.pending.lock().map(|p| p.len()).unwrap_or(0)
+    }
+
+    fn clear(&self) {
+        if let Ok(mut pending) = self.pending.lock() {
+            pending.clear();
+        }
+    }
+}
+
 /// 目錄式儲存：使用單一資料夾多檔案結構
 ///
 /// 目錄結構：
@@ -112,8 +274,10 @@ pub struct DirStorage {
     is_new: bool,
     cache: PageCache,
     bloom: Option<BloomFilter>,
-    lock_manager: Arc<PageLockManager>,
+    lock_manager: Arc<StripeLockManager>,
     fd_pool: FileHandleCache,
+    node_cache: NodeCache,
+    write_coalescer: WriteCoalescer,
 }
 
 impl DirStorage {
@@ -148,8 +312,10 @@ impl DirStorage {
             is_new,
             cache: PageCache::new(DIR_DEFAULT_CACHE_SIZE),
             bloom: Some(BloomFilter::new(1024 * 1024, 7)),
-            lock_manager: Arc::new(PageLockManager::new()),
+            lock_manager: Arc::new(StripeLockManager::new(DEFAULT_STRIPE_COUNT)),
             fd_pool: FileHandleCache::new(data_dir),
+            node_cache: NodeCache::new(NODE_CACHE_MAX_SIZE),
+            write_coalescer: WriteCoalescer::new(WRITE_COALESCE_WINDOW_MS, WRITE_COALESCE_THRESHOLD),
         };
         
         if is_new {
@@ -200,13 +366,10 @@ impl DirStorage {
 
     /// 讀取頁面（含快取+鎖）
     fn read_page(&self, page_id: usize) -> std::io::Result<Vec<u8>> {
-        // 先檢查快取（快取本身有執行緒保護）
         if let Some(data) = self.cache.get(page_id) {
             return Ok(data);
         }
-        // 從磁碟讀取（加共享鎖）
-        let _lock = self.lock_manager.lock_shared(page_id)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::WouldBlock, e))?;
+        let _lock = self.lock_manager.lock_shared(page_id);
         let data = self.read_page_from_disk(page_id)?;
         self.cache.put(page_id, data.clone());
         Ok(data)
@@ -214,13 +377,12 @@ impl DirStorage {
 
     /// 寫入頁面（含快取失效+鎖）
     fn write_page(&mut self, page_id: usize, data: &[u8]) -> std::io::Result<()> {
-        let _lock = self.lock_manager.lock_exclusive(page_id)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::WouldBlock, e))?;
-        
+        let _lock = self.lock_manager.lock_exclusive(page_id);
         let path = self.page_path(page_id);
         if page_id >= self.page_count { self.page_count = page_id + 1; }
         self.cache.invalidate(page_id);
         self.fd_pool.invalidate(page_id);
+        self.node_cache.invalidate(page_id);
         self.wal.write_page(page_id as u32, data.to_vec());
         if !self.wal.in_txn() {
             std::fs::write(&path, data)?;
@@ -231,7 +393,10 @@ impl DirStorage {
 
     pub fn cache_stats(&self) -> (usize, usize, usize) { self.cache.stats() }
     pub fn fd_pool_stats(&self) -> usize { self.fd_pool.stats() }
-    pub fn clear_cache(&self) { self.cache.clear(); self.fd_pool.clear(); }
+    pub fn node_cache_stats(&self) -> usize { self.node_cache.stats() }
+    pub fn stripe_stats(&self) -> (usize, usize) { self.lock_manager.stats() }
+    pub fn write_coalescer_pending(&self) -> usize { self.write_coalescer.pending_count() }
+    pub fn clear_cache(&self) { self.cache.clear(); self.fd_pool.clear(); self.node_cache.clear(); self.write_coalescer.clear(); }
     pub fn bloom_insert(&mut self, key: &[u8]) { if let Some(ref mut b) = self.bloom { b.insert(key); } }
     pub fn bloom_might_contain(&self, key: &[u8]) -> bool { self.bloom.as_ref().map(|b| b.might_contain(key)).unwrap_or(true) }
 
@@ -302,9 +467,18 @@ impl DirStorage {
 
 impl Storage for DirStorage {
     fn read_node(&mut self, page_id: usize) -> Node {
-        if let Some(data) = self.wal.read_page(page_id as u32) { return decode_node(data); }
+        if let Some(node) = self.node_cache.get(page_id) {
+            return node;
+        }
+        if let Some(data) = self.wal.read_page(page_id as u32) {
+            let node = decode_node(data);
+            self.node_cache.put(page_id, node.clone());
+            return node;
+        }
         let data = self.read_page(page_id).expect("page not found");
-        decode_node(&data)
+        let node = decode_node(&data);
+        self.node_cache.put(page_id, node.clone());
+        node
     }
 
     fn write_node(&mut self, page_id: usize, node: &Node) {
@@ -316,6 +490,7 @@ impl Storage for DirStorage {
                 self.wal.save_original(page_id as u32, data.to_vec());
             }
         }
+        self.node_cache.invalidate(page_id);
         self.wal.write_page(page_id as u32, buf);
     }
 
@@ -330,6 +505,15 @@ impl Storage for DirStorage {
     fn page_count(&self) -> usize { self.page_count }
 
     fn flush(&mut self) {
+        if self.write_coalescer.should_flush() || self.wal.frame_count() > 0 {
+            let pending = self.write_coalescer.drain();
+            if !pending.is_empty() {
+                for (page_id, data) in pending {
+                    let path = self.data_dir.join(format!("{}.page", page_id));
+                    let _ = std::fs::write(&path, &data);
+                }
+            }
+        }
         if self.wal.frame_count() > 0 {
             let data_dir = self.data_dir.clone();
             self.wal.checkpoint(|page_id, data| {
@@ -342,7 +526,7 @@ impl Storage for DirStorage {
 
     fn begin_txn(&mut self)    { self.wal.begin(); }
     fn commit_txn(&mut self)   { self.wal.commit().unwrap(); }
-    fn rollback_txn(&mut self) { self.wal.rollback(); self.cache.clear(); }
+    fn rollback_txn(&mut self) { self.wal.rollback(); self.cache.clear(); self.node_cache.clear(); self.write_coalescer.clear(); }
     fn catalog_root(&self) -> Option<usize> { self.catalog_root }
     fn set_catalog_root(&mut self, root: usize) { self.catalog_root = Some(root); let _ = self.write_catalog(); }
     fn is_wal(&self) -> bool { true }
