@@ -10,7 +10,7 @@
 #       print(row)
 #   conn.close()
 
-__version__ = "6.14.0"
+__version__ = "6.15.0"
 __all__ = [
     "connect", "Connection", "Cursor", "Error",
     "Sql6Pool", "PoolConfig", "QueryCache",
